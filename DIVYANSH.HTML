@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LR Booking Form — Edit, Auto-fill & Export</title>
+<style>
+  body { font-family: Arial, sans-serif; background:#f9f9f9; margin:0; padding:20px; }
+  h1 { text-align:center; margin-bottom:20px; }
+  form, .result-table { background:#fff; padding:20px; border-radius:8px; box-shadow:0 0 10px rgba(0,0,0,0.1); max-width:1100px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+  label { font-size:14px; margin-bottom:4px; display:block; }
+  input, select { width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; }
+  .actions { text-align:right; margin-top:10px; }
+  .btn { padding:8px 12px; border:none; border-radius:4px; cursor:pointer; margin-left:6px; }
+  .btn-primary { background:#007bff; color:#fff; }
+  .btn-danger { background:#dc3545; color:#fff; }
+  .btn-secondary { background:#6c757d; color:#fff; }
+  table { width:100%; border-collapse:collapse; margin-top:20px; }
+  th, td { border:1px solid #ccc; padding:8px; text-align:left; font-size:14px; }
+  th { background:#007bff; color:#fff; }
+  @media print {
+    body * { visibility: hidden; }
+    .result-table, .result-table * { visibility: visible; }
+    .actions { display: none; }
+    .result-table { position: absolute; top: 0; left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<h1>LR Booking Form</h1>
+<form id="lrForm">
+  <div class="grid">
+    <div><label>LR DATE</label><input type="date" name="lrDate" required></div>
+    <div><label>LR NO.</label><input name="lrNo" id="lrNo" list="lrNoList" required></div>
+    <div><label>TRANSPORTER NAME</label><input name="transporter" id="transporter" list="transporterList" required></div>
+    <div><label>FROM</label><input name="from" id="fromField" list="fromList" required></div>
+    <div><label>TO</label><input name="to" id="toField" list="toList" required></div>
+    <div><label>VEHICLE NO.</label><input name="vehicleNo" id="vehicleNo" list="vehicleList" required></div>
+    <div><label>BOOKING AMOUNT</label><input type="number" step="0.01" min="0" name="bookingAmount" id="bookingAmount" required></div>
+    <div>
+      <label>TDS Rate</label>
+      <select id="tdsRate" name="tdsRate">
+        <option value="0">None</option>
+        <option value="0.01">1%</option>
+        <option value="0.02">2%</option>
+      </select>
+    </div>
+    <div><label>TDS Amount</label><input type="number" step="0.01" name="tds" id="tds" readonly></div>
+    <div><label>ADVANCE</label><input type="number" step="0.01" min="0" name="advance" id="advance" value="0"></div>
+    <div><label>ACCOUNT NUMBER</label><input name="accountNumber" id="accountNumber" list="accountList" required></div>
+  </div>
+  <div class="actions">
+    <button type="button" id="addBtn" class="btn btn-primary" onclick="addEntry()">Add Entry</button>
+    <button type="button" id="cancelBtn" class="btn btn-secondary" onclick="cancelEdit()" style="display:none;">Cancel Edit</button>
+  </div>
+</form>
+
+<datalist id="lrNoList"></datalist>
+<datalist id="transporterList"></datalist>
+<datalist id="fromList"></datalist>
+<datalist id="toList"></datalist>
+<datalist id="vehicleList"></datalist>
+<datalist id="accountList"></datalist>
+
+<div id="result" class="result-table" style="display:none;">
+  <h2>Booking Details</h2>
+  <table id="dataTable">
+    <thead>
+      <tr>
+        <th>SR. NO.</th>
+        <th>LR DATE</th>
+        <th>LR NO.</th>
+        <th>TRANSPORTER</th>
+        <th>FROM</th>
+        <th>TO</th>
+        <th>VEHICLE NO.</th>
+        <th>BOOKING AMT</th>
+        <th>TDS RATE</th>
+        <th>TDS</th>
+        <th>ADVANCE</th>
+        <th>ACCOUNT NO.</th>
+        <th>ACTION</th>
+      </tr>
+    </thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+  <div class="actions">
+    <button onclick="exportCSV()" class="btn btn-primary">Export to Excel (CSV)</button>
+    <button onclick="window.print()" class="btn btn-primary">Print</button>
+    <button onclick="clearAll()" class="btn btn-danger">Clear All</button>
+  </div>
+</div>
+
+<script>
+let editingRow = null;
+const transporterAccounts = {};
+let bookingInput, tdsInput, tdsRateSelect, transporterInput, accountInput;
+
+function normalize(s){ return (s||'').toString().trim().toLowerCase(); }
+
+function calcTDS(){
+  const booking = parseFloat(bookingInput.value) || 0;
+  const rate = parseFloat(tdsRateSelect.value) || 0;
+  tdsInput.value = (booking * rate).toFixed(2);
+}
+
+function transporterInputHandler(){
+  const v = normalize(transporterInput.value);
+  if(!v) return;
+  if(transporterAccounts[v]){
+    accountInput.value = transporterAccounts[v];
+    return;
+  }
+  for(const key in transporterAccounts){
+    if(key.startsWith(v)){
+      accountInput.value = transporterAccounts[key];
+      return;
+    }
+  }
+}
+
+function addEntry(){
+  const form = document.getElementById('lrForm');
+  if(!form.checkValidity()){ form.reportValidity(); return; }
+  const data = new FormData(form);
+  const values = Object.fromEntries(data.entries());
+  const tKey = normalize(values.transporter);
+  if(tKey) transporterAccounts[tKey] = values.accountNumber;
+
+  if(editingRow){
+    updateRowFromValues(editingRow, values);
+    editingRow = null;
+    document.getElementById('addBtn').textContent = 'Add Entry';
+    document.getElementById('cancelBtn').style.display = 'none';
+  } else {
+    const tbody = document.getElementById('resultBody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td></td>
+      <td>${escapeHtml(values.lrDate)}</td>
+      <td>${escapeHtml(values.lrNo)}</td>
+      <td>${escapeHtml(values.transporter)}</td>
+      <td>${escapeHtml(values.from)}</td>
+      <td>${escapeHtml(values.to)}</td>
+      <td>${escapeHtml(values.vehicleNo)}</td>
+      <td>${escapeHtml(values.bookingAmount)}</td>
+      <td>${values.tdsRate == 0 ? 'None' : (parseFloat(values.tdsRate)*100).toFixed(0)+'%'}</td>
+      <td>${escapeHtml(values.tds)}</td>
+      <td>${escapeHtml(values.advance)}</td>
+      <td>${escapeHtml(values.accountNumber)}</td>
+      <td>
+        <button class="btn btn-secondary" onclick="editRow(this)">Edit</button>
+        <button class="btn btn-danger" onclick="deleteRow(this)">Delete</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+    renumberRows();
+    document.getElementById('result').style.display = 'block';
+  }
+
+  updateSuggestions(values);
+  form.reset();
+  calcTDS();
+}
+
+function updateRowFromValues(row, values){
+  const cells = row.children;
+  cells[1].textContent = values.lrDate;
+  cells[2].textContent = values.lrNo;
+  cells[3].textContent = values.transporter;
+  cells[4].textContent = values.from;
+  cells[5].textContent = values.to;
+  cells[6].textContent = values.vehicleNo;
+  cells[7].textContent = values.bookingAmount;
+  cells[8].textContent = values.tdsRate == 0 ? 'None' : (parseFloat(values.tdsRate)*100).toFixed(0)+'%';
+  cells[9].textContent = values.tds;
+  cells[10].textContent = values.advance;
+  cells[11].textContent = values.accountNumber;
+}
+
+function editRow(btn){
+  const tr = btn.closest('tr');
+  editingRow = tr;
+  const cells = tr.children;
+  document.querySelector('input[name="lrDate"]').value = cells[1].textContent;
+  document.querySelector('input[name="lrNo"]').value = cells[2].textContent;
+  document.querySelector('input[name="transporter"]').value = cells[3].textContent;
+  document.querySelector('input[name="from"]').value = cells[4].textContent;
+  document.querySelector('input[name="to"]').value = cells[5].textContent;
+  document.querySelector('input[name="vehicleNo"]').value = cells[6].textContent;
+  document.querySelector('input[name="bookingAmount"]').value = cells[7].textContent;
+  const rateText = cells[8].textContent.replace('%','').trim();
+  if(rateText === 'None') document.getElementById('tdsRate').value = '0';
+  else if(rateText === '2') document.getElementById('tdsRate').value = '0.02';
+  else document.getElementById('tdsRate').value = '0.01';
+  document.querySelector('input[name="tds"]').value = cells[9].textContent;
+  document.querySelector('input[name="advance"]').value = cells[10].textContent;
+  document.querySelector('input[name="accountNumber"]').value = cells[11].textContent;
+
+  document.getElementById('addBtn').textContent = 'Update Entry';
+  document.getElementById('cancelBtn').style.display = 'inline-block';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function deleteRow(btn){
+  btn.closest('tr').remove();
+  renumberRows();
+  if(document.getElementById('resultBody').children.length === 0) document.getElementById('result').style.display = 'none';
+}
+
+function cancelEdit(){
+  editingRow = null;
+  document.getElementById('lrForm').reset();
+  document.getElementById('addBtn').textContent = 'Add Entry';
+  document.getElementById('cancelBtn').style.display = 'none';
+  calcTDS();
+}
+
+function renumberRows(){
+  Array.from(document.getElementById('resultBody').children).forEach((row, i) => row.children[0].textContent = i + 1);
+}
+
+function clearAll(){
+  document.getElementById('resultBody').innerHTML = '';
+  document.getElementById('result').style.display = 'none';
+  cancelEdit();
+}
+
+function exportCSV(){
+  const table = document.getElementById('dataTable');
+  const headers = Array.from(table.tHead.rows[0].cells).slice(0, -1).map(h => h.textContent.trim());
+  const rows = [headers.join(',')];
+  Array.from(table.tBodies[0].rows).forEach(r =>{
+    const cols = Array.from(r.cells).slice(0, -1).map(c => '"'+(c.textContent.trim().replace(/"/g,'""'))+'"');
+    rows.push(cols.join(','));
+  });
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'BookingDetails.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function updateSuggestions(values){
+  addOption('lrNoList', values.lrNo);
+  addOption('transporterList', values.transporter);
+  addOption('fromList', values.from);
+  addOption('toList', values.to);
+  addOption('vehicleList', values.vehicleNo);
+  addOption('accountList', values.accountNumber);
+}
+
+function addOption(listId, value){
+  if(!value) return;
+  const list = document.getElementById(listId);
+  if(!Array.from(list.options).some(o => o.value === value)){
+    const opt = document.createElement('option');
+    opt.value = value;
+    list.appendChild(opt);
+  }
+}
+
+function escapeHtml(text){
+  return text ? text.toString().replace(/[&"'<>]/g, m => ({'&':'&amp;','"':'&quot;',"'":'&#39;','<':'&lt;','>':'&gt;'}[m])) : '';
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  bookingInput = document.getElementById('bookingAmount');
+  tdsInput = document.getElementById('tds');
+  tdsRateSelect = document.getElementById('tdsRate');
+  transporterInput = document.getElementById('transporter');
+  accountInput = document.getElementById('accountNumber');
+  bookingInput.addEventListener('input', calcTDS);
+  tdsRateSelect.addEventListener('change', calcTDS);
+  transporterInput.addEventListener('input', transporterInputHandler);
+  calcTDS();
+});
+</script>
+</body>
+</html>
